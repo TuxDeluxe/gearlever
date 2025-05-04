@@ -28,19 +28,6 @@
     "modules": [
         "./python3-requirements.json",
         {
-            "name": "get_appimage_offset",
-            "buildsystem": "simple",
-            "build-commands": [
-                "install -Dm 755 get_appimage_offset.sh /app/bin/get_appimage_offset"
-            ],
-            "sources": [
-                {
-                    "type": "file",
-                    "path": "./build-aux/get_appimage_offset.sh"
-                }
-            ]
-        },
-        {
             "name": "unsquashfs",
             "buildsystem": "simple",
             "cleanup": [
