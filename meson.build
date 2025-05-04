@@ -14,6 +14,7 @@ gnome = import('gnome')
 subdir('data')
 subdir('src')
 subdir('po')
+subdir('build-aux')
 
 gnome.post_install(
   glib_compile_schemas: true,
