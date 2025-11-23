@@ -7,16 +7,17 @@ import shlex
 from xdg import DesktopEntry
 
 import dataclasses
-from ..lib.constants import APP_ID
-from ..lib import terminal
+from ..models.Settings import Settings
 from ..models.AppListElement import AppListElement, InstalledStatus
-from ..lib.async_utils import _async, idle
-from ..lib.json_config import save_config_for_app, read_config_for_app
-from ..lib.utils import get_giofile_content_type, get_gsettings, gio_copy, get_file_hash, \
-    remove_special_chars, get_random_string, show_message_dialog, get_osinfo
+from ..lib.constants import TMP_DIR
+from ..lib import terminal
+from ..lib.async_utils import idle
+from ..lib.json_config import read_config_for_app, remove_update_config
+from ..lib.utils import get_giofile_content_type, gio_copy, get_file_hash, \
+    remove_special_chars, get_random_string, show_message_dialog, get_osinfo, extract_terminal_arguments
 from ..models.Models import AppUpdateElement, InternalError, DownloadInterruptedException
 from typing import Optional, List, TypedDict
-from gi.repository import GLib, Gtk, Gdk, Gio, Adw
+from gi.repository import GLib, Gtk, Gdk, Gio
 from enum import Enum
 
 
@@ -68,7 +69,7 @@ class AppImageListElement():
 
 
 class AppImageProvider():
-    supported_mimes = ['application/x-iso9660-appimage', 'application/vnd.appimage']
+    supported_mimes = ['application/x-iso9660-appimage', 'application/vnd.appimage', 'application/x-appimage']
     
     def __init__(self):
         self.name = 'AppImage'
@@ -77,17 +78,16 @@ class AppImageProvider():
         self.desktop_exec_codes = ["%f", "%F",  "%u",  "%U",  "%i",  "%c", "%k"]
         logging.info(f'Activating {self.name} provider')
 
-
         self.general_messages = []
         self.update_messages = []
 
-        self.extraction_folder = os.path.join(GLib.get_tmp_dir(), APP_ID, 'appimages')
+        self.extraction_folder = os.path.join(TMP_DIR, 'appimages')
         self.user_desktop_files_path = os.path.join(GLib.get_home_dir(), '.local', 'share', 'applications')
         self.user_local_share_path = os.path.join(GLib.get_home_dir(), '.local', 'share')
 
     def list_installed(self) -> list[AppImageListElement]:
         default_folder_path = self._get_appimages_default_destination_path()
-        manage_from_outside = get_gsettings().get_boolean('manage-files-outside-default-folder')
+        manage_from_outside = Settings.settings.get_boolean('manage-files-outside-default-folder')
         output = []
 
         if not os.path.exists(self.user_desktop_files_path):
@@ -101,19 +101,7 @@ class AppImageProvider():
                 if os.path.isfile(gfile.get_path()) and get_giofile_content_type(gfile) == 'application/x-desktop':
                     entry = DesktopEntry.DesktopEntry(filename=gfile.get_path())
                     exec_location = entry.getTryExec()
-                    exec_index = entry.getExec().find(exec_location)
-
-                    exec_tokens = []
-                    env_variables = []
-                    if exec_index >= 0:
-                        after_exec = entry.getExec()[exec_index:]
-                        before_exec = entry.getExec()[:exec_index]
-
-                        exec_tokens = shlex.split(after_exec)[1:]
-                        before_exec_tokens = shlex.split(before_exec)
-
-                        if before_exec and before_exec_tokens[0] == 'env':
-                            [env_variables.append(v) for v in before_exec_tokens[1:]]
+                    exec_command_data = extract_terminal_arguments(entry.getExec())
 
                     if os.path.isfile(exec_location):
                         exec_gfile = Gio.File.new_for_path(exec_location)
@@ -126,18 +114,18 @@ class AppImageProvider():
                                 name=entry.getName(),
                                 desktop_file_path=gfile.get_path(),
                                 description=entry.getComment(),
-                                version=entry.get('X-AppImage-Version'),
+                                version=self._get_app_version(None, desktop_entry=entry),
                                 installed_status=InstalledStatus.INSTALLED,
                                 file_path=exec_location,
                                 provider=self.name,
                                 desktop_entry=entry,
                                 trusted=True,
                                 external_folder=(not exec_in_defalut_folder),
-                                exec_arguments=exec_tokens,
-                                env_variables=env_variables,
+                                exec_arguments=exec_command_data['arguments'],
+                                env_variables=exec_command_data['env_vars'],
                             )
 
-                            list_element.architecture = self.get_elf_arch(list_element)
+                            list_element.architecture = None
 
                             output.append(list_element)
                         else:
@@ -190,7 +178,7 @@ class AppImageProvider():
         
         return ''
 
-    def refresh_title(self, el: AppImageListElement):
+    def refresh_data(self, el: AppImageListElement):
         if el.desktop_entry:
             el.name = el.desktop_entry.getName()
         
@@ -199,7 +187,10 @@ class AppImageProvider():
             el.name = extracted.desktop_entry.getName()
             el.version = el.desktop_entry.get('X-AppImage-Version')
 
-    def uninstall(self, el: AppImageListElement, force_delete=False):
+    def refresh_arch(self, el: AppImageListElement):
+        el.architecture = self.get_elf_arch(el)
+
+    def uninstall(self, el: AppImageListElement, force_delete=False, remove_configuration=True):
         logging.info(f'Removing {el.file_path}')
 
         gf = Gio.File.new_for_path(el.file_path)
@@ -222,6 +213,9 @@ class AppImageProvider():
         icon = el.desktop_entry.getIcon()
         if '/' in icon and os.path.isfile(icon):
             os.remove(icon)
+
+        if remove_configuration:
+            remove_update_config(el)
 
         el.set_installed_status(InstalledStatus.NOT_INSTALLED)
 
@@ -264,6 +258,7 @@ class AppImageProvider():
         logging.info('Installing appimage: ' + el.file_path)
         el.installed_status = InstalledStatus.INSTALLING
         extracted_appimage: Optional[ExtractedAppImage] = None
+        appimages_destination_path = self._get_appimages_default_destination_path()
 
         try:
             extracted_appimage = self._load_appimage_metadata(el)
@@ -271,53 +266,46 @@ class AppImageProvider():
             dest_file_info = extracted_appimage.appimage_file.query_info('*', Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS)
 
             # Move .appimage to its default location
-            appimages_destination_path = self._get_appimages_default_destination_path()
-
             if not os.path.exists(f'{appimages_destination_path}'):
                 os.mkdir(f'{appimages_destination_path}')
 
             # how the appimage will be called
             appimage_filename = ''
             prefixed_filename = ''
-            if el.update_logic == AppImageUpdateLogic.REPLACE:
+            if el.update_logic == AppImageUpdateLogic.REPLACE and el.updating_from is not None:
                 appimage_filename = os.path.basename(el.updating_from.file_path)
                 desktop_file_path = os.path.basename(el.updating_from.desktop_file_path)
                 prefixed_filename = os.path.splitext(desktop_file_path)[0]
             else:
-                appimage_filename = f'gearlever_{dest_file_info.get_name()}'
+                dest_file_info_name = os.path.splitext(dest_file_info.get_name())[0]
+                appimage_filename = f'gearlever_{dest_file_info_name}'
+
                 if extracted_appimage.desktop_entry:
                     appimage_filename = extracted_appimage.desktop_entry.getName()
                     appimage_filename = appimage_filename.lower().replace(' ', '_')
                 
-                appimage_filename = re.sub(r"[^A-Za-z0-9_]+", "", appimage_filename).lower()
-
                 append_file_ext = True
-                gsettings = get_gsettings()
+                gsettings = Settings.settings
 
                 if extracted_appimage.desktop_entry and \
                     gsettings.get_boolean('exec-as-name-for-terminal-apps') and \
                         extracted_appimage.desktop_entry.getTerminal():
 
-                    exec_name = shlex.split(extracted_appimage.desktop_entry.getExec())[0]
-                    appimage_filename = exec_name
-
+                    append_file_ext = False
                     if appimage_filename == 'AppDir':
                         appimage_filename = extracted_appimage.desktop_entry.getName()
-                        appimage_filename = appimage_filename.lower()
-
-                    append_file_ext = False
-
-                # if there is already an app with the same name, 
-                # we try not to overwrite
 
                 if append_file_ext:
-                    appimage_filename = appimage_filename + '.appimage'
+                    appimage_filename = f'{appimage_filename}.appimage'
 
-                appimage_filename = remove_special_chars(appimage_filename)
-                app_name_without_ext = os.path.splitext(appimage_filename)[0]
+                app_name_without_ext = appimage_filename
+                appimage_filename = remove_special_chars(appimage_filename).lower()
 
                 i = 0
                 files_in_dest_dir = os.listdir(self._get_appimages_default_destination_path())
+
+                # if there is already an app with the same name, 
+                # we try not to overwrite
                 while appimage_filename in files_in_dest_dir:
                     if i == 0:
                         appimage_filename = app_name_without_ext + '_' + version.replace('.', '_')
@@ -371,25 +359,37 @@ class AppImageProvider():
             exec_arguments = shlex.split(extracted_appimage.desktop_entry.getExec())[1:]
             el.exec_arguments = exec_arguments
 
+            desk_entry_section_regex = re.compile(r'\[Desktop Entry\][\s\S]*?(?=\n\[)', flags=re.MULTILINE)
             with open(extracted_appimage.desktop_file.get_path(), 'r') as dskt_file:
                 desktop_file_content = dskt_file.read()
-                desktop_file_content = re.sub(r'^TryExec=.*$', "", desktop_file_content, flags=re.MULTILINE)
-                desktop_file_content = re.sub(r'^Icon=.*$', "", desktop_file_content, flags=re.MULTILINE)
+                desktop_file_entry_section_match = desk_entry_section_regex.search(desktop_file_content)
+
+                desktop_file_entry_section = ''
+                if desktop_file_entry_section_match:
+                    desktop_file_entry_section = str(desktop_file_entry_section_match.group(0))
+                else:
+                    desktop_file_entry_section = desktop_file_content
+
+                desktop_file_entry_section_original = desktop_file_entry_section
+
+                desktop_file_entry_section = re.sub(r'^TryExec=.*$', "", desktop_file_entry_section, flags=re.MULTILINE)
+                desktop_file_entry_section = re.sub(r'^Icon=.*$', "", desktop_file_entry_section, flags=re.MULTILINE)
+                desktop_file_entry_section = re.sub(r'^X-AppImage-Version=.*$', "", desktop_file_entry_section, flags=re.MULTILINE)
 
                 # replace executable path
                 exec_command = ['Exec=' + shlex.join([dest_appimage_file.get_path(), *exec_arguments])]
                 # replace try exec executable path
-                exec_command.append(f'TryExec={dest_appimage_file.get_path()}')
+                exec_command.append(f'TryExec=' + dest_appimage_file.get_path())
 
                 if dest_appimage_icon_file:
                     exec_command.append(f"Icon={dest_appimage_icon_file.get_path()}")
                 else:
                     exec_command.append(f'Icon=applications-other')
 
-                desktop_file_content = re.sub(
+                desktop_file_entry_section = re.sub(
                     r'^Exec=.*$',
                     '\n'.join(exec_command),
-                    desktop_file_content,
+                    desktop_file_entry_section,
                     flags=re.MULTILINE
                 )
 
@@ -397,25 +397,27 @@ class AppImageProvider():
                 final_app_name = extracted_appimage.appimage_file.get_basename()
                 if extracted_appimage.desktop_entry:
                     final_app_name = extracted_appimage.desktop_entry.getName()
-                    desktop_file_content += f'\nX-AppImage-Version={version}'
+                    desktop_file_entry_section = desktop_file_entry_section.strip()
+                    desktop_file_entry_section += f'\nX-AppImage-Version={version}\n'
 
                     if el.update_logic is AppImageUpdateLogic.KEEP:
                         final_app_name += f' ({version})'
 
-                        desktop_file_content = re.sub(
+                        desktop_file_entry_section = re.sub(
                             r'^Name\[(.*?)\]=.*$',
                             '',
-                            desktop_file_content,
+                            desktop_file_entry_section,
                             flags=re.MULTILINE
                         )
 
                 final_app_name = final_app_name.strip()
-                desktop_file_content = re.sub(
-                    r'^Name=.*$',
-                    f"Name={final_app_name}",
-                    desktop_file_content,
-                    flags=re.MULTILINE
+
+                desktop_file_content = desktop_file_content.replace(
+                    desktop_file_entry_section_original,
+                    desktop_file_entry_section
                 )
+
+                desktop_file_content = re.sub(r'\n\n(?!\[)', '\n', desktop_file_content)
 
                 # finally, write the new .desktop file
                 if (not os.path.exists(self.user_desktop_files_path)) and os.path.exists(self.user_local_share_path):
@@ -433,14 +435,25 @@ class AppImageProvider():
                 el.env_variables = el.updating_from.env_variables
                 self.update_desktop_file(el)
 
+            has_desktop_integration = False
+            for v in el.env_variables:
+                if v.startswith('DESKTOPINTEGRATION='):
+                    has_desktop_integration = True
+                    break
+
+            if not has_desktop_integration:
+                el.env_variables.append('DESKTOPINTEGRATION=1')
+                self.update_desktop_file(el)
+
         except Exception as e:
             logging.error('Appimage installation error: ' + str(e))
             raise e
 
-        if get_gsettings().get_boolean('move-appimage-on-integration'):
-            logging.info('Deleting original appimage file from: '  + extracted_appimage.appimage_file.get_path())
-            if not extracted_appimage.appimage_file.delete(None):
-                raise InternalError('Cannot delete original file')
+        if Settings.settings.get_boolean('move-appimage-on-integration'):
+            if os.path.dirname(extracted_appimage.appimage_file.get_path()) != appimages_destination_path:
+                logging.info('Deleting original appimage file from: '  + extracted_appimage.appimage_file.get_path())
+                if not extracted_appimage.appimage_file.delete(None):
+                    raise InternalError('Cannot delete original file')
 
         update_dkt_db = terminal.host_sh(['update-desktop-database', self.user_desktop_files_path, '-q'], return_stderr=True)
         logging.debug(update_dkt_db)
@@ -463,7 +476,7 @@ class AppImageProvider():
 
         gio_copy(outdated_file, new_file)
 
-        self.uninstall(el)
+        self.uninstall(el, remove_configuration=False)
 
         el.file_path = f'{dest_path}/tmp.appimage'
         el.extracted = None
@@ -484,11 +497,12 @@ class AppImageProvider():
 
         return str(appimage_type)
 
-    def create_list_element_from_file(self, file: Gio.File) -> AppImageListElement:
+    def create_list_element_from_file(self, file: Gio.File, return_new_el=False) -> AppImageListElement:
         if not self.can_install_file(file):
             raise InternalError(message='This file type is not supported')
         
-        app_name: str = file.get_parse_name().split('/')[-1]
+        app_name: str = os.path.basename(file.get_parse_name())
+        preview_enabled = Settings.settings.get_boolean('preview-before-opening-app')
 
         el = AppImageListElement(
             name=re.sub(r'\.appimage$', '', app_name, 1, re.IGNORECASE),
@@ -499,9 +513,13 @@ class AppImageProvider():
             file_path=file.get_path(),
             desktop_entry=None,
             local_file=True,
+            trusted=(not preview_enabled)
         )
 
         el.architecture = self.get_elf_arch(el)
+
+        if return_new_el:
+            return el
 
         if self.is_installed(el):
             for installed in self.list_installed():
@@ -559,7 +577,11 @@ class AppImageProvider():
             if env_vars:
                 env_vars = f'env {env_vars} '
 
-            exec_command = f'{env_vars}{tryexec_command}{exec_arguments}'
+            exec_command = ''.join([
+                env_vars,
+                shlex.quote(tryexec_command),
+                exec_arguments
+            ])
 
             # replace executable path
             desktop_file_content = re.sub(
@@ -574,11 +596,11 @@ class AppImageProvider():
 
         el.desktop_entry = DesktopEntry.DesktopEntry(filename=el.desktop_file_path)
 
-    def update_from_url(self, manager, el: AppImageListElement, status_cb: callable) -> AppImageListElement:
+    def update_from_url(self, manager, el: AppImageListElement, status_cb: callable) -> AppImageListElement | None:
         try:
             update_file_path, f_hash = manager.download(status_cb)
         except DownloadInterruptedException as de:
-            return el
+            return None
         except Exception as e:
             raise e
 
@@ -587,8 +609,7 @@ class AppImageProvider():
         if not self.can_install_file(update_gfile):
             raise Exception(_('The downloaded file is not a valid appimage, please check if the provided URL is correct'))
         
-        list_element = self.create_list_element_from_file(update_gfile)
-        self.refresh_title(list_element)
+        list_element = self.create_list_element_from_file(update_gfile, return_new_el=True)
 
         list_element.update_logic = AppImageUpdateLogic.REPLACE
         list_element.updating_from = el
@@ -842,15 +863,18 @@ class AppImageProvider():
         return result
 
     def _get_appimages_default_destination_path(self) -> str:
-        return get_gsettings().get_string('appimages-default-folder').replace('~', GLib.get_home_dir())
+        folder = Settings.settings.get_string('appimages-default-folder')
+        return re.sub(r'^~', GLib.get_home_dir(), folder)
 
-    def _get_app_version(self, extracted_appimage: ExtractedAppImage):
-        version = None
+    def _get_app_version(self, extracted_appimage: Optional[ExtractedAppImage], desktop_entry: Optional[DesktopEntry] = None):
+        if not desktop_entry:
+            desktop_entry = extracted_appimage.desktop_entry
 
-        if extracted_appimage.desktop_entry:
-            version = extracted_appimage.desktop_entry.get('X-AppImage-Version')
+        version = desktop_entry.get(
+            'X-AppImage-Version'
+        )
 
-        if not version:
+        if (not version) and extracted_appimage:
             version = extracted_appimage.md5[0:6]
 
         return version

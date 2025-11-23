@@ -5,7 +5,7 @@
   <img width="150" src="data/icons/hicolor/scalable/apps/it.mijorus.gearlever.svg">
 </p>
 
-<p align="center"><a href="https://flatstat.mijorus.it/app/it.mijorus.gearlever"  align="center"><img width="150" src="https://img.shields.io/endpoint?url=https://flathub-stats-backend.vercel.app/badges/it.mijorus.gearlever/shields.io.json"></a></p>
+<p align="center"><img width="100" src="https://img.shields.io/flathub/downloads/it.mijorus.gearlever"></p>
 
 
 
@@ -32,11 +32,15 @@ Please use `flatpak run it.mijorus.gearlever --help` to get an updated version o
 Usage: flatpak run it.mijorus.gearlever [OPTION...]
 # OR gearlever [OPTION...] if using the alias
 
---integrate        Integrate an AppImage file                                                                 
---update           Update an AppImage file                                                                    
---remove           Trashes an AppImage, its .desktop file and icons                                           
---list-installed   List integrated apps                                                                       
---list-updates     List available updates   
+
+--integrate        Integrate an AppImage file
+--update           Update an AppImage file
+--remove           Trashes an AppImage, its .desktop file and icons
+--list-installed   List integrated apps
+--list-updates     List available updates
+--set-update-url   Set/Unset a custom update url
+--fetch-updates    Fetch updates in the background and sends a desktop notification, used on system startup
+
 ```
 
 For an improved user experience, add the following line to your `.bashrc` file
@@ -86,6 +90,11 @@ flatpak install --bundle --user gearlever.flatpak
   ```
 
 ## Run CLI tests
+1. Download the latest release here:
+   https://github.com/mijorus/gearlever-test-files
+2. Pleace if under test/
+3. Extract it `tar -xzvf testfiles.tar.gz`
+4. Run:
 ```sh
 python3 -m unittest tests/test_cli.py
 ```

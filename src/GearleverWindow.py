@@ -25,18 +25,19 @@ from .MultiUpdate import MultiUpdate
 from .providers.providers_list import appimage_provider
 from .providers.AppImageProvider import AppImageListElement
 from .models.AppListElement import AppListElement
+from .models.Settings import Settings
 from .lib import utils
 
-from gi.repository import Gtk, Adw, Gio, Gdk
+from gi.repository import Gtk, Adw, Gio, Gdk, GLib
 
 
-class GearleverWindow(Gtk.ApplicationWindow):
+class GearleverWindow(Adw.Window):
     def __init__(self, from_file=False, **kwargs):
         super().__init__(**kwargs)
         self.from_file = from_file
         self.selected_files_count = 0
         self.open_appimage_tooltip = _('Open a new AppImage')
-        self.settings = utils.get_gsettings()
+        self.settings = Settings.settings
 
         # Create a container stack 
         self.container_stack = Adw.Leaflet(can_unfold=False, can_navigate_back=True, can_navigate_forward=False)
@@ -64,7 +65,9 @@ class GearleverWindow(Gtk.ApplicationWindow):
         self.titlebar.pack_end(self.search_btn)
         
         self.titlebar.set_title_widget(self.view_title_widget)
-        self.set_titlebar(self.titlebar)
+
+        toolbar_view = Adw.ToolbarView()
+        toolbar_view.add_top_bar(self.titlebar)
 
         self.set_title('Gear lever')
         self.set_default_size(700, 700)
@@ -75,6 +78,8 @@ class GearleverWindow(Gtk.ApplicationWindow):
         self.installed_stack = Gtk.Stack()
         self.app_details = AppDetails()
         self.app_details.connect('uninstalled-app', self.on_uninstalled_app)
+        self.app_details.connect('update-started', self.on_app_update_started)
+        self.app_details.connect('update-ended', self.on_app_update_ended)
 
         self.installed_apps_list = InstalledAppsList()
         self.installed_apps_list.refresh_list()
@@ -128,7 +133,8 @@ class GearleverWindow(Gtk.ApplicationWindow):
 
         toast_overlay.set_child(self.container_stack)
 
-        self.set_child(toast_overlay)
+        toolbar_view.set_content(toast_overlay)
+        self.set_content(toolbar_view)
 
         if self.settings.get_boolean('is-maximized'):
             self.maximize()
@@ -179,7 +185,7 @@ class GearleverWindow(Gtk.ApplicationWindow):
     def on_show_installed_list(self, source: Gtk.Widget=None, data=None):
         self.container_stack.set_transition_type(Adw.LeafletTransitionType.OVER)
 
-        self.installed_apps_list.refresh_list()
+        # self.installed_apps_list.refresh_list()
         self.container_stack.set_visible_child(self.app_lists_stack)
 
     def on_left_button_clicked(self, *args):
@@ -216,6 +222,7 @@ class GearleverWindow(Gtk.ApplicationWindow):
         in_app_details = self.container_stack.get_visible_child() is self.app_details
         in_multi_install = self.container_stack.get_visible_child() is self.multi_install
         in_multi_update = self.container_stack.get_visible_child() is self.multi_update
+        in_apps_list = self.container_stack.get_visible_child() is self.app_lists_stack
 
         if in_app_details or in_multi_install:
             self.left_button.set_icon_name('gl-left-symbolic')
@@ -227,6 +234,9 @@ class GearleverWindow(Gtk.ApplicationWindow):
             self.search_btn.set_visible(True)
             self.left_button.set_child(self.open_appimage_button_child)
 
+        if in_apps_list:
+            self.installed_apps_list.refresh_list()
+
         self.view_title_widget.set_visible(not in_app_details)
 
     def on_drop_event(self, widget, value, x, y):
@@ -236,7 +246,7 @@ class GearleverWindow(Gtk.ApplicationWindow):
             return self.on_selected_local_file(list(value))
 
         return False
-    
+
     def on_drop_enter(self, widget, x, y):
         self.container_stack.set_transition_type(Adw.LeafletTransitionType.UNDER)
         self.visible_before_dragdrop_start = self.container_stack.get_visible_child()
@@ -259,6 +269,15 @@ class GearleverWindow(Gtk.ApplicationWindow):
             return self.close()
 
         self.on_show_installed_list(widget, data)
+
+    def on_app_update_started(self, *args):
+        self.left_button.set_visible(False)
+        self.left_button.set_sensitive(False)
+
+    def on_app_update_ended(self, *args):
+        self.left_button.set_visible(True)
+        self.left_button.set_sensitive(True)
+
 
     def on_open_file_chooser_response(self, dialog, result):
         try:

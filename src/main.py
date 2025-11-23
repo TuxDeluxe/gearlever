@@ -18,11 +18,13 @@
 import sys
 import gi
 import logging
+import shutil
 import os
 
+from .models.Settings import Settings
 from .lib.terminal import sandbox_sh
-from .lib.utils import get_gsettings, make_option
-from .lib.constants import APP_ID, APP_NAME, APP_DATA
+from .lib.utils import make_option
+from .lib.constants import APP_ID, APP_NAME, APP_DATA, TMP_DIR
 from .providers.providers_list import appimage_provider
 from .GearleverWindow import GearleverWindow
 from  .WelcomeScreen import WelcomeScreen
@@ -45,9 +47,9 @@ class GearleverApplication(Adw.Application):
     def __init__(self, version, pkgdatadir):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_OPEN)
         self.create_action('about', self.on_about_action)
-        self.create_action('preferences', self.on_preferences_action)
+        self.create_action('preferences', self.on_preferences_action, ['<primary>comma'])
         self.create_action('open_log_file', self.on_open_log_file)
-        self.create_action('open_welcome_screen', self.on_open_welcome_screen)
+        self.create_action('open_welcome_screen', self.on_open_welcome_screen, ['F1'])
         self.win = None
         self.version = version
         self.add_main_option_entries(Cli.options)
@@ -59,7 +61,7 @@ class GearleverApplication(Adw.Application):
         logging.info(f'\n\n---- Application startup | version {self.version}')
         Adw.Application.do_startup(self)
 
-        settings = get_gsettings()
+        settings = Settings.settings
 
         logging.debug('::: Settings')
         for k in settings.props.settings_schema.list_keys():
@@ -81,6 +83,7 @@ class GearleverApplication(Adw.Application):
 
         if not self.win:
             self.win = GearleverWindow(application=self, from_file=from_file)
+            self.win.connect('close-request', self.on_close_request)
 
         print('Logging to file ' + LOG_FILE)
         self.win.present()
@@ -97,7 +100,7 @@ class GearleverApplication(Adw.Application):
         self.win.on_selected_local_file(list(files))
 
     def on_about_action(self, widget, data):
-        about = Adw.AboutWindow(
+        about = Adw.AboutDialog(
             application_name='Gear Lever',
             version=self.version,
             developers=['Lorenzo Paderi'],
@@ -107,7 +110,8 @@ class GearleverApplication(Adw.Application):
         )
 
         about.set_translator_credits(_("translator_credits"))
-        about.present()
+        if self.win:
+            about.present(self.win)
 
     def on_preferences_action(self, widget, _):
         """Callback for the app.preferences action."""
@@ -138,9 +142,15 @@ class GearleverApplication(Adw.Application):
         launcher = Gtk.FileLauncher.new(log_gfile)
         launcher.launch()
 
+    def on_close_request(self, *args):
+        if os.path.exists(TMP_DIR):
+            shutil.rmtree(TMP_DIR)
+        return False
+
     def on_open_welcome_screen(self, widget, event):
         tutorial = WelcomeScreen()
-        tutorial.present()
+        if self.win:
+            tutorial.present(self.win)
 
 def main(version, pkgdatadir):
     """The application's entry point."""
@@ -149,7 +159,10 @@ def main(version, pkgdatadir):
     LOG_FILE = os.path.join(LOG_FOLDER, f'{APP_NAME}.log')
 
     if not os.path.exists(LOG_FOLDER):
-         os.makedirs(LOG_FOLDER)
+        os.makedirs(LOG_FOLDER)
+
+    if not os.path.exists(TMP_DIR):
+        os.makedirs(TMP_DIR)
 
     # Clear log file if it's too big
     log_file_size = 0
@@ -166,7 +179,7 @@ def main(version, pkgdatadir):
         filemode='a',
         encoding='utf-8',
         format='%(asctime)s %(levelname)-1s [%(filename)s:%(lineno)d] %(message)s',
-        level= logging.DEBUG if get_gsettings().get_boolean('debug-logs') else logging.INFO,
+        level= logging.DEBUG if Settings.settings.get_boolean('debug-logs') else logging.INFO,
         force=True
     )
 

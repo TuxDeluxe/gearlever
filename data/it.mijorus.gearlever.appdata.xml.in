@@ -20,6 +20,60 @@
         <p>An utility to manage AppImages with ease! Gear lever will organize and manage AppImage files for you, generate desktop entries and app metadata, update apps in-place or keep multiple versions side-by-side.</p>
     </description>
     <releases>
+        <release type="stable" version="3.4.7" date="2025-11-30:00:00Z">
+            <description>
+                <p>- Bug fix</p>
+            </description>
+        </release>
+        <release type="stable" version="3.4.6" date="2025-11-29:00:00Z">
+            <description>
+                <p>- Improved desktop file support: added support for desktop actions</p>
+            </description>
+        </release>
+        <release type="stable" version="3.4.5" date="2025-10-09:00:00Z">
+            <description>
+                <p>- Fixed an issue happening on systems with more than one user</p>
+            </description>
+        </release>
+        <release type="stable" version="3.4.2" date="2025-08-09:00:00Z">
+            <description>
+                <p>- Fixed an issue when integrating apps from CLI</p>
+            </description>
+        </release>
+        <release type="stable" version="3.4.1" date="2025-08-09:00:00Z">
+            <description>
+                <p>- Added new command line option to unset update url</p>
+            </description>
+        </release>
+        <release type="stable" version="3.4.0" date="2025-07-31:00:00Z">
+            <description>
+                <p>- Added new command line option --set-update-url</p>
+                <p>- Update to Gnome Runtime 48</p>
+            </description>
+        </release>
+        <release type="stable" version="3.3.4" date="2025-07-04:00:00Z">
+            <description>
+                <p>- Fixed an issue caused by apps with spaces in their file names</p>
+            </description>
+        </release>
+        <release type="stable" version="3.3.3" date="2025-06-10:00:00Z">
+            <description>
+                <p>- Fixed an issue introduced with 3.3.1</p>
+                <p>- Fixed an issue causing some apps to be detected as always out-of-date</p>
+            </description>
+        </release>
+        <release type="stable" version="3.3.1" date="2025-06-10:00:00Z">
+            <description>
+                <p>- Fixed an issue causing app updates to delete the original app</p>
+            </description>
+        </release>
+        <release type="stable" version="3.3.0" date="2025-06-04:00:00Z">
+            <description>
+                <p>- Added support for Gitlab</p>
+                <p>- Added support for Codeberg</p>
+                <p>- Allow users to override the update url provided by the developer</p>
+            </description>
+        </release>
         <release type="stable" version="3.2.2" date="2025-04-17:00:00Z">
             <description>
                 <p>- Improved support for apps using squashfs</p>
